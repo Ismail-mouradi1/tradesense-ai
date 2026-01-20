@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useLocation, Link, useNavigate } from 'react-router-dom';
 import { CreditCard, Wallet, CheckCircle, ArrowLeft, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -19,10 +19,72 @@ export default function Checkout() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
-  const planId = location.state?.planId;
-  const plan = location.state?.plan || 'Pro';
-  const price = location.state?.price || '500';
-  const accountSize = location.state?.accountSize || 50000;
+  // Get plan info from state (initial load) or URL params (PayPal return)
+  // Memoize to prevent infinite re-renders
+  const { planSlug, plan, price, accountSize, paypalToken } = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return {
+      planSlug: location.state?.planId || params.get('planSlug'),
+      plan: location.state?.plan || params.get('plan') || 'Pro',
+      price: location.state?.price || params.get('price') || '500',
+      accountSize: location.state?.accountSize || parseInt(params.get('accountSize') || '50000'),
+      paypalToken: params.get('token'),
+    };
+  }, [location.search, location.state]);
+  const [planId, setPlanId] = useState<string | null>(null);
+
+  // Fetch the actual plan UUID from the database
+  useEffect(() => {
+    (async () => {
+      // Try 1: Match by plan name
+      if (planSlug) {
+        const { data, error } = await supabase
+          .from('challenge_plans')
+          .select('id')
+          .ilike('name', planSlug)
+          .single();
+
+        if (!error && data) {
+          setPlanId(data.id);
+          return;
+        }
+        console.error('Error fetching plan by name:', error);
+      }
+
+      // Try 2: Match by account size
+      if (accountSize) {
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('challenge_plans')
+          .select('id')
+          .eq('account_size', accountSize)
+          .single();
+
+        if (!fallbackError && fallbackData) {
+          setPlanId(fallbackData.id);
+          return;
+        }
+        console.error('Error fetching plan by account size:', fallbackError);
+      }
+
+      // Try 3: Get the first active plan
+      const { data: firstPlan, error: firstPlanError } = await supabase
+        .from('challenge_plans')
+        .select('id')
+        .eq('is_active', true)
+        .order('price', { ascending: true })
+        .limit(1)
+        .single();
+
+      if (!firstPlanError && firstPlan) {
+        console.log('Using first available plan as fallback');
+        setPlanId(firstPlan.id);
+        return;
+      }
+
+      console.error('No plans found in database');
+      toast.error('Aucun plan disponible');
+    })();
+  }, [planSlug, accountSize]);
 
   const paymentMethods = [
     { id: 'cmi' as const, name: 'CMI', icon: CreditCard, description: 'Carte bancaire marocaine' },
@@ -31,9 +93,8 @@ export default function Checkout() {
   ];
 
   useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const token = params.get('token');
-    if (token && user && planId && !isSuccess) {
+    if (paypalToken && user && planId && !isSuccess) {
+      const token = paypalToken;
       (async () => {
         try {
           setIsProcessing(true);
@@ -93,8 +154,7 @@ export default function Checkout() {
         }
       })();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.search, user, planId]);
+  }, [paypalToken, user, planId, accountSize, navigate, price, isSuccess]);
 
   const handlePayment = async () => {
     if (!selectedMethod || !user || !planId) {
@@ -106,14 +166,20 @@ export default function Checkout() {
     
     try {
       if (selectedMethod === 'paypal') {
+        const returnParams = new URLSearchParams({
+          planSlug: planSlug || '',
+          plan,
+          price,
+          accountSize: accountSize.toString(),
+        });
         const resp = await fetch('http://localhost:5000/api/paypal/create-order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             amount: (parseInt(price) * 1.2).toFixed(2),
             currency: 'USD',
-            return_url: `${window.location.origin}/checkout`,
-            cancel_url: `${window.location.origin}/checkout`,
+            return_url: `${window.location.origin}/checkout?${returnParams.toString()}`,
+            cancel_url: `${window.location.origin}/checkout?${returnParams.toString()}`,
           }),
         });
         const data = await resp.json();

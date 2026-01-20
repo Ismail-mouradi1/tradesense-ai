@@ -5,7 +5,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 
 const pricingPlans = [
   {
-    id: 'starter',
+    id: 'Starter',
     name: 'Starter',
     price: 200,
     icon: Rocket,
@@ -21,8 +21,8 @@ const pricingPlans = [
     ],
   },
   {
-    id: 'pro',
-    name: 'Pro',
+    id: 'Professional',
+    name: 'Professional',
     price: 500,
     icon: Star,
     accountSize: 50000,
@@ -39,8 +39,8 @@ const pricingPlans = [
     ],
   },
   {
-    id: 'elite',
-    name: 'Elite',
+    id: 'Expert',
+    name: 'Expert',
     price: 1000,
     icon: Zap,
     accountSize: 100000,
