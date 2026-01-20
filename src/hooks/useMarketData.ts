@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
 
 export interface MarketTicker {
   symbol: string;
@@ -16,28 +15,33 @@ export interface MarketTicker {
 interface UseMarketDataOptions {
   symbols?: string[];
   market?: 'international' | 'morocco' | 'all';
-  refreshInterval?: number; // in milliseconds
+  refreshInterval?: number;
 }
 
 export function useMarketData(options: UseMarketDataOptions = {}) {
   const { 
     symbols, 
     market = 'all', 
-    refreshInterval = 30000 // 30 seconds default
+    refreshInterval = 30000 
   } = options;
   
   const [data, setData] = useState<Record<string, MarketTicker>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  
+  // Create a stable string key for dependencies
   const cacheKey = `ts_market_data_${market}_${(symbols || []).join(',')}`;
 
   const fetchData = useCallback(async () => {
     try {
       console.log('Fetching market data...');
       
-      // Use Flask backend instead of Supabase Edge Functions
-      const response = await fetch('http://localhost:5000/api/market-data', {
+      // ✅ FIX 1: Use Environment Variable
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+      
+      // ✅ FIX 2: Correct fetch syntax
+      const response = await fetch(`${API_URL}/api/market-data`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -49,21 +53,20 @@ export function useMarketData(options: UseMarketDataOptions = {}) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const data = await response.json();
+      const result = await response.json();
 
-      if (data.success && data.data) {
-        setData(data.data);
+      if (result.success && result.data) {
+        setData(result.data);
         setLastUpdate(new Date());
         setError(null);
-        console.log(`Updated ${Object.keys(data.data).length} tickers`);
         try {
           localStorage.setItem(
             cacheKey,
-            JSON.stringify({ data: data.data, ts: Date.now() })
+            JSON.stringify({ data: result.data, ts: Date.now() })
           );
         } catch { void 0; }
       } else {
-        throw new Error(data.error || 'Failed to fetch market data');
+        throw new Error(result.error || 'Failed to fetch market data');
       }
     } catch (err) {
       console.error('Market data error:', err);
@@ -71,13 +74,14 @@ export function useMarketData(options: UseMarketDataOptions = {}) {
     } finally {
       setIsLoading(false);
     }
-  }, [symbols, market, cacheKey]);
+  }, [cacheKey, market]); // ✅ FIX 3: Depend on stable cacheKey, NOT 'symbols' array
 
   useEffect(() => {
+    // Load cached data first
     try {
       const raw = localStorage.getItem(cacheKey);
       if (raw) {
-        const parsed = JSON.parse(raw) as { data: Record<string, MarketTicker>; ts: number };
+        const parsed = JSON.parse(raw);
         if (parsed?.data && Object.keys(parsed.data).length > 0) {
           setData(parsed.data);
           setLastUpdate(new Date(parsed.ts));
@@ -85,12 +89,12 @@ export function useMarketData(options: UseMarketDataOptions = {}) {
         }
       }
     } catch { void 0; }
+
     fetchData();
     
     const interval = setInterval(fetchData, refreshInterval);
-    
     return () => clearInterval(interval);
-  }, [fetchData, refreshInterval, cacheKey]);
+  }, [fetchData, refreshInterval]);
 
   const tickers = Object.values(data);
 
